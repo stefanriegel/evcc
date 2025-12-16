@@ -3,14 +3,21 @@ products:
   - brand: Huawei
     description:
       generic: EMMA
+capabilities: ["battery-control"]
 params:
   - name: usage
     choice: ["grid", "pv", "battery"]
     allinone: true
   - name: modbus
     choice: ["tcpip"]
-  - name: capacity
-    advanced: true
+   - name: capacity
+     advanced: true
+   - name: minsoc
+     advanced: true
+   - name: maxsoc
+     advanced: true
+   - name: maxchargepower
+   - name: maxdischargepower
 render: |
   type: custom
   {{- if eq .usage "grid" }}
@@ -103,6 +110,223 @@ render: |
       address: 30368
       type: holding
       decode: uint16nan
-    scale: 0.01
-  capacity: {{ .capacity }} # kWh
-  {{- end }}
+     scale: 0.01
+   limitsoc:
+     source: convert
+     convert: float2int
+     set:
+       source: modbus
+       id: 0
+       uri: {{ .host }}:{{ .port }}
+       register:
+         address: 47081 # Storage discharging cutoff capacity
+         type: writesingle
+         decode: uint16
+     scale: 10
+   capacity: {{ .capacity }} # kWh
+   minsoc: {{ .minsoc }} # %
+   maxsoc: {{ .maxsoc }} # %
+   maxchargepower: {{ .maxchargepower }} # W
+   maxdischargepower: {{ .maxdischargepower }} # W
+   {{- end }}
+   {{- if eq .usage "battery" }}
+   batterymode:
+     source: watchdog
+     timeout: 30s
+     reset: 1 # reset watchdog on normal
+     set:
+       source: switch
+       switch:
+       - case: 1 # normal
+         set:
+           source: const
+           value: 0 # stop
+           set:
+             source: modbus
+             id: 0
+             uri: {{ .host }}:{{ .port }}
+             register:
+               address: 47100 # Forcible charge/discharge
+               type: writesingle
+               encoding: uint16
+       - case: 2 # hold
+         set:
+           source: sequence
+           set:
+           - source: const
+             value: 2 # discharge
+             set:
+               source: modbus
+               id: 0
+               uri: {{ .host }}:{{ .port }}
+               register:
+                 address: 47100 # Forcible charge/discharge
+                 type: writesingle
+                 encoding: uint16
+           - source: const
+             value: 0 # duration
+             set:
+               source: modbus
+               id: 0
+               uri: {{ .host }}:{{ .port }}
+               register:
+                 address: 47246 # Forcible charge/discharge setting mode
+                 type: writesingle
+                 encoding: uint16
+           - source: const
+             value: 1 # Minute
+             set:
+               source: modbus
+               id: 0
+               uri: {{ .host }}:{{ .port }}
+               register:
+                 address: 47083 # Forced charging and discharging period
+                 type: writesingle
+                 encoding: uint16
+           - source: const
+             value: 0 # SOC
+             set:
+               source: modbus
+               id: 0
+               uri: {{ .host }}:{{ .port }}
+               register:
+                 address: 47101 # Forcible charge/discharge SOC
+                 type: writesingle
+                 encoding: uint16
+       - case: 3 # charge
+         set:
+           source: sequence
+           set:
+           - source: const
+             value: 1 # charge
+             set:
+               source: modbus
+               id: 0
+               uri: {{ .host }}:{{ .port }}
+               register:
+                 address: 47100 # Forcible charge/discharge
+                 type: writesingle
+                 encoding: uint16
+           - source: go
+             script: power
+             in:
+             - name: power
+               type: int
+               config:
+                 source: convert
+                 convert: float2int
+                 set:
+                   source: const
+                   value: {{ .maxchargepower }}
+             out:
+             - name: power
+               type: int
+               config:
+                 source: modbus
+                 id: 0
+                 uri: {{ .host }}:{{ .port }}
+                 register:
+                   address: 47084 # Forced charging and discharging power
+                   type: writesingle
+                   encoding: uint16
+           - source: const
+             value: 1 # SOC
+             set:
+               source: modbus
+               id: 0
+               uri: {{ .host }}:{{ .port }}
+               register:
+                 address: 47246 # Forcible charge/discharge setting mode
+                 type: writesingle
+                 encoding: uint16
+           - source: go
+             script: soc
+             in:
+             - name: soc
+               type: int
+               config:
+                 source: convert
+                 convert: float2int
+                 set:
+                   source: const
+                   value: {{ .maxsoc }}
+             out:
+             - name: soc
+               type: int
+               config:
+                 source: modbus
+                 id: 0
+                 uri: {{ .host }}:{{ .port }}
+                 register:
+                   address: 47101 # Forcible charge/discharge SOC
+                   type: writesingle
+                   encoding: uint16
+       - case: 4 # discharge
+         set:
+           source: sequence
+           set:
+           - source: const
+             value: 2 # discharge
+             set:
+               source: modbus
+               id: 0
+               uri: {{ .host }}:{{ .port }}
+               register:
+                 address: 47100 # Forcible charge/discharge
+                 type: writesingle
+                 encoding: uint16
+           - source: go
+             script: power
+             in:
+             - name: power
+               type: int
+               config:
+                 source: convert
+                 convert: float2int
+                 set:
+                   source: const
+                   value: {{ .maxdischargepower }}
+             out:
+             - name: power
+               type: int
+               config:
+                 source: modbus
+                 id: 0
+                 uri: {{ .host }}:{{ .port }}
+                 register:
+                   address: 47249 # Forcible discharge power
+                   type: writesingle
+                   encoding: uint16
+           - source: const
+             value: 1 # SOC
+             set:
+               source: modbus
+               id: 0
+               uri: {{ .host }}:{{ .port }}
+               register:
+                 address: 47246 # Forcible charge/discharge setting mode
+                 type: writesingle
+                 encoding: uint16
+           - source: go
+             script: soc
+             in:
+             - name: soc
+               type: int
+               config:
+                 source: convert
+                 convert: float2int
+                 set:
+                   source: const
+                   value: {{ .maxsoc }}
+             out:
+             - name: soc
+               type: int
+               config:
+                 source: modbus
+                 id: 0
+                 uri: {{ .host }}:{{ .port }}
+                 register:
+                   address: 47101 # Forcible charge/discharge SOC
+                   type: writesingle
+                   encoding: uint16
+   {{- end }}
